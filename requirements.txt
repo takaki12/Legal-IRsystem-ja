@@ -1,0 +1,6 @@
+fugashi==1.1.2
+ipadic==1.0.0
+pytorch-lightning==1.6.4
+torch==1.11.0
+tqdm==4.64.0
+transformers==4.20.1
