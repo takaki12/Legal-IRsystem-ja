@@ -147,13 +147,39 @@ class SentenceBERT(pl.LightningModule):
         val_loss = self.triplet_loss(output1,output2,output3)
         self.log('val_loss', val_loss) # 損失を'val_loss'の名前でログをとる。
 
+    # テストデータの評価用
+    def test_step(self, batch, batch_idx):
+        losses = []
+        sim_diffs = []
+        prc = []
+        output1 = mean_pooling(model.bert_sc1(attention_mask=batch['attention_mask_a'], 
+                                input_ids=batch['input_ids_a'], 
+                                token_type_ids=batch['token_type_ids_a']), 
+                                batch['attention_mask_a'])
+        output2 = mean_pooling(model.bert_sc2(attention_mask=batch['attention_mask_p'], 
+                                input_ids=batch['input_ids_p'], 
+                                token_type_ids=batch['token_type_ids_p']), 
+                                batch['attention_mask_p'])
+        output3 = mean_pooling(model.bert_sc2(attention_mask=batch['attention_mask_n'], 
+                                input_ids=batch['input_ids_n'], 
+                                token_type_ids=batch['token_type_ids_n']), 
+                                batch['attention_mask_n'])
+        loss = model.triplet_loss(output1,output2,output3)
+        losses.extend([float(loss.cpu())])
+        cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
+        sim_diff = cos(output1, output2)-cos(output1, output3)
+        sim_diffs.extend(np.array(sim_diff.cpu()))
+        prc.extend([float(torch.sum(cos(output1, output2)>cos(output1, output3)).cpu())])
+
+        print("loss:{0}".format(np.array(losses).mean()))
+        print("cos_diff:{0}".format(np.array(sim_diffs).mean()))
+        print("presicion:{0}".format(np.array(prc).sum()/len(dataloader_test)))
+
     # 学習に用いるオプティマイザを返す関数を書く。
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
-
 ################################################################################
-
 
 # 学習時にモデルの重みを保存する条件を指定
 checkpoint = pl.callbacks.ModelCheckpoint(
@@ -179,37 +205,8 @@ model = SentenceBERT(model_name=MODEL_NAME, lr=1e-5)
 lr_finder = trainer.tuner.lr_find(model, dataloader_train, dataloader_val)
 model.hparams.lr = lr_finder.suggestion()
 
-# テストデータの評価用
-def evaluation_testdata(dataloader_test,model):
-    losses = []
-    sim_diffs = []
-    prc = []
-    for batch in dataloader_test:
-        output1 = mean_pooling(model.bert_sc1(attention_mask=batch['attention_mask_a'], 
-                                input_ids=batch['input_ids_a'], 
-                                token_type_ids=batch['token_type_ids_a']), 
-                                batch['attention_mask_a'])
-        output2 = mean_pooling(model.bert_sc2(attention_mask=batch['attention_mask_p'], 
-                                input_ids=batch['input_ids_p'], 
-                                token_type_ids=batch['token_type_ids_p']), 
-                                batch['attention_mask_p'])
-        output3 = mean_pooling(model.bert_sc2(attention_mask=batch['attention_mask_n'], 
-                                input_ids=batch['input_ids_n'], 
-                                token_type_ids=batch['token_type_ids_n']), 
-                                batch['attention_mask_n'])
-        loss = model.triplet_loss(output1,output2,output3)
-        losses.extend([float(loss.cpu())])
-        cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-        sim_diff = cos(output1, output2)-cos(output1, output3)
-        sim_diffs.extend(np.array(sim_diff.cpu()))
-        prc.extend([float(torch.sum(cos(output1, output2)>cos(output1, output3)).cpu())])
-
-    print("loss:{0}".format(np.array(losses).mean()))
-    print("cos_diff:{0}".format(np.array(sim_diffs).mean()))
-    print("presicion:{0}".format(np.array(prc).sum()/len(dataloader_test)))
-
 # ファインチューニング前に試してみる
-evaluation_testdata(dataloader_test,model)
+pre_test = trainer.test(dataloaders=dataloader_test)
 
 # ファインチューニングの実行!
 trainer.fit(model, dataloader_train, dataloader_val)
@@ -220,6 +217,7 @@ print('ベストモデルのファイル: ', checkpoint.best_model_path)
 print('ベストモデルの検証データに対する損失: ', checkpoint.best_model_score)
 
 # テストデータによる評価
+print("== Test ==")
 test = trainer.test(dataloaders=dataloader_test)
 
 # モデルのロード
@@ -228,4 +226,4 @@ model = SentenceBERT.load_from_checkpoint(
 )
 
 # 保存
-model.bert_sc.save_pretrained('./model_transformers')
+model.bert_sc.save_pretrained('./model_sbert')
